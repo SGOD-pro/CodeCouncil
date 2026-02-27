@@ -1,146 +1,312 @@
 "use client";
 
 import { useState } from "react";
-import dynamic from "next/dynamic";
-import CodeEditor from "./components/CodeEditor";
+import { useRouter } from "next/navigation";
+import Navbar from "./components/Navbar";
+import { setUser } from "../lib/user";
 
-const DocGeneratorPanel = dynamic(() => import("./components/DocGeneratorPanel"), { ssr: false });
+// ── Types ──────────────────────────────────────────────────────────────────
+type ModalType = "create" | "join" | null;
 
-const SAMPLE_CODE = `import React from 'react';
-
-export default function App () {
-  // This is where code usually goes...
-  return (
-    <div>Hello World</div>
-  );
-}`;
-
-const NAV_ICONS = [
+// ── Feature cards data ─────────────────────────────────────────────────────
+const FEATURES = [
   {
-    id: "explorer",
-    title: "Explorer",
     icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
       </svg>
     ),
+    color: "#3B82F6", bg: "rgba(59,130,246,0.1)", border: "rgba(59,130,246,0.2)",
+    title: "Timeline Intelligence",
+    desc: "Replay your entire debug session step-by-step. Scrub through every code change and pinpoint exactly when a bug was introduced.",
   },
   {
-    id: "search",
-    title: "Search",
     icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <circle cx="11" cy="11" r="8" />
-        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
       </svg>
     ),
+    color: "#F59E0B", bg: "rgba(245,158,11,0.1)", border: "rgba(245,158,11,0.2)",
+    title: "Hackathon Mode",
+    desc: "Built for pressure. Countdown timer, critical issue tracking, AI fix suggestions with confidence scores — all in one focused view.",
   },
   {
-    id: "docs",
-    title: "Documentation Generator",
     icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
         <polyline points="14 2 14 8 20 8" />
         <line x1="16" y1="13" x2="8" y2="13" />
         <line x1="16" y1="17" x2="8" y2="17" />
-        <polyline points="10 9 9 9 8 9" />
       </svg>
     ),
+    color: "#10B981", bg: "rgba(16,185,129,0.1)", border: "rgba(16,185,129,0.2)",
+    title: "Auto Docs",
+    desc: "Paste your code, get production-ready documentation instantly. JSDoc, markdown, type annotations — export in one click.",
   },
 ];
 
-export default function Home() {
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [activeNav, setActiveNav] = useState("explorer");
+// ── Modal ──────────────────────────────────────────────────────────────────
+function Modal({ type, onClose }: { type: ModalType; onClose: () => void }) {
+  const router = useRouter();
+  const [roomName, setRoomName] = useState("ALPHA-4291");
+  const [roomCode, setRoomCode] = useState("");
+  const [userName, setUserName] = useState("");
+  const [error, setError] = useState("");
 
-  const handleNavClick = (id: string) => {
-    setActiveNav(id);
-    if (id === "docs") {
-      setPanelOpen(true);
-    }
+  if (!type) return null;
+
+  const handleCreate = () => {
+    if (!userName.trim()) { setError("Please enter your name"); return; }
+    if (!roomName.trim()) { setError("Please enter a room name"); return; }
+    const slug = roomName.trim().toUpperCase().replace(/\s+/g, "-");
+    setUser(userName.trim());
+    router.push(`/room/${slug}`);
   };
 
+  const handleJoin = () => {
+    if (!userName.trim()) { setError("Please enter your name"); return; }
+    if (!roomCode.trim()) { setError("Please enter a room code"); return; }
+    const slug = roomCode.trim().toUpperCase().replace(/\s+/g, "-");
+    setUser(userName.trim());
+    router.push(`/room/${slug}`);
+  };
+
+  const isCreate = type === "create";
+
   return (
-    <div className="flex h-screen w-screen bg-[#0e1117] overflow-hidden">
-      {/* Activity Bar */}
-      <div className="w-12 flex flex-col items-center py-3 bg-[#0b0e14] border-r border-white/8 z-10 flex-shrink-0">
-        {/* App Logo */}
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center mb-4 shadow-lg shadow-violet-500/20">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="white">
-            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-          </svg>
-        </div>
-
-        {/* Nav Icons */}
-        <div className="flex flex-col items-center gap-1 mt-1">
-          {NAV_ICONS.map((nav) => (
-            <button
-              key={nav.id}
-              title={nav.title}
-              onClick={() => handleNavClick(nav.id)}
-              className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-150
-                ${activeNav === nav.id
-                  ? "text-white bg-white/10"
-                  : "text-zinc-600 hover:text-zinc-300 hover:bg-white/5"
-                }`}
-            >
-              {nav.icon}
-            </button>
-          ))}
-        </div>
-
-        {/* Settings at bottom */}
-        <div className="mt-auto">
+    <div
+      style={{
+        position: "fixed", inset: 0, zIndex: 999,
+        background: "rgba(0,0,0,0.7)",
+        backdropFilter: "blur(6px)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 24,
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        style={{
+          background: "#13131E",
+          border: "1px solid #2D2D3F",
+          borderRadius: 16,
+          padding: "32px 28px",
+          width: "100%",
+          maxWidth: 420,
+          boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
+        }}
+      >
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#E2E8F0" }}>
+              {isCreate ? "Create a Room" : "Join a Room"}
+            </h2>
+            <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748B" }}>
+              {isCreate ? "Start a new collaborative session" : "Enter a code to join your team"}
+            </p>
+          </div>
           <button
-            title="Settings"
-            className="w-10 h-10 rounded-lg flex items-center justify-center text-zinc-600 hover:text-zinc-300 hover:bg-white/5 transition-all duration-150"
+            onClick={onClose}
+            style={{ background: "transparent", border: "none", cursor: "pointer", color: "#4B5563", padding: 4, borderRadius: 6, display: "flex" }}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
             </svg>
           </button>
         </div>
-      </div>
 
-      {/* Main Editor Area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Title Bar */}
-        <div className="h-10 bg-[#0b0e14] border-b border-white/8 flex items-center px-4 gap-3 flex-shrink-0">
-          <span className="text-sm font-medium text-zinc-300">CodePulse Editor</span>
-          <div className="flex-1" />
-          {/* Avatar */}
-          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-pink-500 to-violet-500 flex items-center justify-center text-white text-xs font-bold">
-            U
+        {/* Fields */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {isCreate ? (
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: "#8892A4", marginBottom: 6, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                Room Name
+              </label>
+              <input
+                value={roomName}
+                onChange={(e) => { setRoomName(e.target.value); setError(""); }}
+                placeholder="ALPHA-4291"
+                style={inputStyle}
+                onFocus={(e) => { e.currentTarget.style.borderColor = "#3B82F6"; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = "#2D2D3F"; }}
+              />
+            </div>
+          ) : (
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: "#8892A4", marginBottom: 6, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                Room Code
+              </label>
+              <input
+                value={roomCode}
+                onChange={(e) => { setRoomCode(e.target.value); setError(""); }}
+                placeholder="e.g. ALPHA-4291"
+                style={inputStyle}
+                onFocus={(e) => { e.currentTarget.style.borderColor = "#3B82F6"; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = "#2D2D3F"; }}
+              />
+            </div>
+          )}
+
+          <div>
+            <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: "#8892A4", marginBottom: 6, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+              Your Name
+            </label>
+            <input
+              value={userName}
+              onChange={(e) => { setUserName(e.target.value); setError(""); }}
+              placeholder="Enter your name"
+              style={inputStyle}
+              onFocus={(e) => { e.currentTarget.style.borderColor = "#3B82F6"; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = "#2D2D3F"; }}
+              onKeyDown={(e) => { if (e.key === "Enter") isCreate ? handleCreate() : handleJoin(); }}
+            />
           </div>
+
+          {error && (
+            <p style={{ margin: 0, fontSize: 12, color: "#EF4444", display: "flex", alignItems: "center", gap: 6 }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+              {error}
+            </p>
+          )}
+
+          <button
+            onClick={isCreate ? handleCreate : handleJoin}
+            style={{
+              marginTop: 4,
+              padding: "12px",
+              borderRadius: 10,
+              border: "none",
+              cursor: "pointer",
+              background: "linear-gradient(135deg, #3B82F6, #6366F1)",
+              color: "white",
+              fontSize: 14,
+              fontWeight: 600,
+              width: "100%",
+              boxShadow: "0 4px 20px rgba(59,130,246,0.3)",
+              transition: "opacity 0.15s, transform 0.15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.9"; e.currentTarget.style.transform = "translateY(-1px)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "translateY(0)"; }}
+          >
+            {isCreate ? "Create Room →" : "Join Room →"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "10px 12px",
+  background: "#0D0D18",
+  border: "1px solid #2D2D3F",
+  borderRadius: 8,
+  color: "#E2E8F0",
+  fontSize: 14,
+  outline: "none",
+  transition: "border-color 0.15s",
+  boxSizing: "border-box",
+};
+
+// ── Page ───────────────────────────────────────────────────────────────────
+export default function Home() {
+  const [modal, setModal] = useState<ModalType>(null);
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#0A0A0F", color: "#E2E8F0", display: "flex", flexDirection: "column", fontFamily: "var(--font-geist-sans), system-ui, sans-serif" }}>
+      <Navbar />
+      <Modal type={modal} onClose={() => setModal(null)} />
+
+      {/* HERO */}
+      <main style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", padding: "80px 24px 60px", maxWidth: 860, margin: "0 auto", width: "100%" }}>
+
+        {/* Badge */}
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "5px 14px", borderRadius: 100, background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.22)", marginBottom: 32 }}>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#3B82F6", display: "inline-block", boxShadow: "0 0 8px rgba(59,130,246,0.8)" }} />
+          <span style={{ fontSize: 12.5, color: "#93C5FD", fontWeight: 500, letterSpacing: "0.04em" }}>AI-Powered · Real-time · Collaborative</span>
         </div>
 
-        {/* Tab Bar */}
-        <div className="h-9 bg-[#0d1017] border-b border-white/8 flex items-end px-2 flex-shrink-0">
-          <div className="flex items-center gap-0.5 h-full px-3 border-b-2 border-blue-500 bg-[#0e1117] text-zinc-300 text-xs rounded-t-md">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="16 18 22 12 16 6" />
-              <polyline points="8 6 2 12 8 18" />
+        {/* Heading */}
+        <h1 style={{ fontSize: "clamp(48px, 8vw, 80px)", fontWeight: 800, lineHeight: 1.08, letterSpacing: "-0.04em", textAlign: "center", margin: "0 0 20px", background: "linear-gradient(160deg, #FFFFFF 30%, #64748B 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+          CodeCouncil
+        </h1>
+
+        {/* Subtitle */}
+        <p style={{ fontSize: "clamp(16px, 2.5vw, 20px)", color: "#64748B", textAlign: "center", maxWidth: 520, lineHeight: 1.65, margin: "0 0 48px", fontWeight: 400 }}>
+          AI-Powered Collaborative Debugging.{" "}
+          <span style={{ color: "#94A3B8" }}>Debug together, ship faster, document automatically.</span>
+        </p>
+
+        {/* CTA Buttons */}
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", justifyContent: "center", marginBottom: 96 }}>
+          {/* Create Room */}
+          <button
+            id="btn-create-room"
+            onClick={() => setModal("create")}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 8, padding: "13px 28px",
+              borderRadius: 10, border: "none", cursor: "pointer",
+              background: "linear-gradient(135deg, #3B82F6, #6366F1)", color: "white",
+              fontSize: 14, fontWeight: 600,
+              boxShadow: "0 4px 24px rgba(59,130,246,0.35)",
+              transition: "transform 0.15s, box-shadow 0.15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 8px 32px rgba(59,130,246,0.45)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 4px 24px rgba(59,130,246,0.35)"; }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg>
-            <span className="ml-1.5">App.tsx</span>
-          </div>
+            Create Room
+          </button>
+
+          {/* Join Room */}
+          <button
+            id="btn-join-room"
+            onClick={() => setModal("join")}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 8, padding: "13px 28px",
+              borderRadius: 10, cursor: "pointer",
+              background: "transparent", color: "#C8D6F0",
+              fontSize: 14, fontWeight: 600,
+              border: "1px solid #2D2D35",
+              transition: "all 0.15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.05)"; e.currentTarget.style.borderColor = "#3D3D4A"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "#2D2D35"; e.currentTarget.style.transform = "translateY(0)"; }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" /><polyline points="10 17 15 12 10 7" /><line x1="15" y1="12" x2="3" y2="12" />
+            </svg>
+            Join Room
+          </button>
         </div>
 
-        {/* Code Editor */}
-        <CodeEditor code={SAMPLE_CODE} />
-
-        {/* Status Bar */}
-        <div className="h-6 bg-blue-600 flex items-center px-4 gap-4 flex-shrink-0">
-          <span className="text-xs text-blue-100">TypeScript JSX</span>
-          <div className="flex-1" />
-          <span className="text-xs text-blue-200">UTF-8</span>
-          <span className="text-xs text-blue-200">Ln 1, Col 1</span>
+        {/* Feature Cards */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 20, width: "100%" }}>
+          {FEATURES.map((f) => (
+            <div
+              key={f.title}
+              style={{ background: "#12121A", border: "1px solid #1E1E2E", borderRadius: 14, padding: "24px 22px", display: "flex", flexDirection: "column", gap: 14, transition: "border-color 0.2s, transform 0.2s" }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = f.border; (e.currentTarget as HTMLDivElement).style.transform = "translateY(-3px)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = "#1E1E2E"; (e.currentTarget as HTMLDivElement).style.transform = "translateY(0)"; }}
+            >
+              <div style={{ width: 44, height: 44, borderRadius: 10, background: f.bg, border: `1px solid ${f.border}`, display: "flex", alignItems: "center", justifyContent: "center", color: f.color, flexShrink: 0 }}>
+                {f.icon}
+              </div>
+              <div>
+                <h3 style={{ margin: "0 0 8px", fontSize: 15, fontWeight: 600, color: "#E2E8F0", letterSpacing: "-0.01em" }}>{f.title}</h3>
+                <p style={{ margin: 0, fontSize: 13, color: "#64748B", lineHeight: 1.65 }}>{f.desc}</p>
+              </div>
+            </div>
+          ))}
         </div>
-      </div>
+      </main>
 
-      {/* Doc Generator Panel */}
-      <DocGeneratorPanel isOpen={panelOpen} onClose={() => { setPanelOpen(false); setActiveNav("explorer"); }} />
+      <footer style={{ borderTop: "1px solid #1E1E2E", padding: "18px 24px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <span style={{ fontSize: 12, color: "#374151" }}>© 2026 CodeCouncil · Built for devs, by devs</span>
+      </footer>
     </div>
   );
 }

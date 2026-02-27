@@ -19,10 +19,8 @@ body {
 }
 
 html,
-body,
-#__next {
+body {
   height: 100%;
-  overflow: hidden;
 }
 
 /* Custom scrollbar */
