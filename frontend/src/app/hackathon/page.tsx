@@ -241,7 +241,7 @@ export default function HackathonPage() {
 
     // Connect WS on mount
     useEffect(() => {
-        const ws = new WebSocket("ws://localhost:5000");
+        const ws = new WebSocket("wss://code-council-orpf.vercel.app");
         wsRef.current = ws;
         ws.onerror = () => { /* WS unavailable — alerts still shown locally */ };
         return () => { ws.close(); wsRef.current = null; };

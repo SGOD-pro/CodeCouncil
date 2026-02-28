@@ -231,11 +231,11 @@ export default function RoomPage() {
         const userName = storedUser.name || user.name || "Guest";
         const avatarColor = storedUser.color || user.color || "#3B82F6";
 
-        const ws = new WebSocket("ws://localhost:5000");
+        const ws = new WebSocket("wss://code-council-orpf.vercel.app");
         wsRef.current = ws;
 
         ws.onopen = () => {
-            console.log("[CodeCouncil] WebSocket connected → ws://localhost:5000");
+            console.log("[CodeCouncil] WebSocket connected → wss://code-council-orpf.vercel.app");
             ws.send(JSON.stringify({ type: "JOIN_ROOM", roomId, userName, avatarColor }));
         };
 
