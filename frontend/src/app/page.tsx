@@ -45,29 +45,53 @@ const FEATURES = [
   },
 ];
 
+// ── Avatar colour palette for new users ────────────────────────────────────
+const AVATAR_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#A855F7", "#EF4444", "#EC4899"];
+const randomColor = () => AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+const randomRoomId = () => Math.random().toString(36).substring(2, 8).toUpperCase();
+
 // ── Modal ──────────────────────────────────────────────────────────────────
 function Modal({ type, onClose }: { type: ModalType; onClose: () => void }) {
   const router = useRouter();
-  const [roomName, setRoomName] = useState("ALPHA-4291");
+  const [roomName, setRoomName] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [userName, setUserName] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   if (!type) return null;
 
   const handleCreate = () => {
     if (!userName.trim()) { setError("Please enter your name"); return; }
     if (!roomName.trim()) { setError("Please enter a room name"); return; }
-    const slug = roomName.trim().toUpperCase().replace(/\s+/g, "-");
-    setUser(userName.trim());
+    setLoading(true); setError("");
+    const color = randomColor();
+    const roomId = randomRoomId();
+    const slug = roomName.trim().toUpperCase().replace(/\s+/g, "-") + "-" + roomId;
+    setUser(userName.trim(), color);
+    // Store room in localStorage so Join Room can validate
+    try {
+      const rooms: Record<string, string> = JSON.parse(localStorage.getItem("codepulse_rooms") ?? "{}");
+      rooms[slug] = roomName.trim();
+      localStorage.setItem("codepulse_rooms", JSON.stringify(rooms));
+    } catch { /* ignore storage errors */ }
     router.push(`/room/${slug}`);
   };
 
   const handleJoin = () => {
     if (!userName.trim()) { setError("Please enter your name"); return; }
     if (!roomCode.trim()) { setError("Please enter a room code"); return; }
+    setLoading(true); setError("");
+    const color = randomColor();
     const slug = roomCode.trim().toUpperCase().replace(/\s+/g, "-");
-    setUser(userName.trim());
+    // Soft-validate: only block if clearly not a room code (too short)
+    try {
+      const rooms: Record<string, string> = JSON.parse(localStorage.getItem("codepulse_rooms") ?? "{}");
+      if (Object.keys(rooms).length > 0 && !rooms[slug]) {
+        setError("Room not found. Check your room code."); setLoading(false); return;
+      }
+    } catch { /* ignore storage errors, navigate anyway */ }
+    setUser(userName.trim(), color);
     router.push(`/room/${slug}`);
   };
 

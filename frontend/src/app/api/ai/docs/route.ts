@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
             body: JSON.stringify({
                 system_instruction: { parts: [{ text: DOCS_SYSTEM_PROMPT }] },
                 contents: [{ parts: [{ text: userPrompt }] }],
-                generationConfig: { temperature: 0.4 },
+                generationConfig: { temperature: 0.3 },
             }),
         });
 

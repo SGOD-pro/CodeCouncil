@@ -30,14 +30,14 @@ export function getUser(): CPUser | null {
     }
 }
 
-export function setUser(name: string): CPUser {
+export function setUser(name: string, color?: string): CPUser {
     const trimmed = name.trim() || "You";
     const words = trimmed.split(/\s+/);
     const initials = words.length >= 2
         ? (words[0][0] + words[1][0]).toUpperCase()
         : trimmed.slice(0, 2).toUpperCase();
-    const color = colorFromName(trimmed);
-    const user: CPUser = { name: trimmed, initials, color };
+    const resolvedColor = color ?? colorFromName(trimmed);
+    const user: CPUser = { name: trimmed, initials, color: resolvedColor };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
     // also keep legacy key for backwards compat
     localStorage.setItem("cp_userName", trimmed);

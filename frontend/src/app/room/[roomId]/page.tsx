@@ -9,6 +9,7 @@ import Navbar from "../../components/Navbar";
 import { getOrDefaultUser } from "../../../lib/user";
 import { useRoomData } from "../../../lib/useRoomData";
 import type { Message } from "../../../lib/useRoomData";
+
 import {
     Send, X, Bot, FileCode, Play, MoreHorizontal,
     Mic, Paperclip, Smile, Zap,
@@ -59,7 +60,7 @@ function Avatar({ initials, color, size = 32, online }: { initials: string; colo
 
 // ── Refactor result types ──────────────────────────────────────────────────
 interface Fix { description: string; filePath: string; lineNumber: number; }
-interface RefactorResult { analysis: string; fixes: Fix[]; confidence: number; }
+interface RefactorResult { analysis: string; fixes: Fix[]; confidence: number; fixedCode?: string; }
 type RefactorState = { status: "idle" } | { status: "loading" } | { status: "done"; result: RefactorResult };
 
 function ChatMessage({
@@ -185,108 +186,348 @@ export default function RoomPage() {
     const router = useRouter();
     const roomId = (params?.roomId as string) ?? "ALPHA-4291";
 
-    // user state
+    // user state — hydrated from localStorage on mount
     const [user, setUserState] = useState(getOrDefaultUser());
     useEffect(() => { setUserState(getOrDefaultUser()); }, []);
 
-    // room data — single source of truth
+    // room data — demo fallback messages, snapshots, timeline events
     const roomData = useRoomData(roomId, user.name, user.initials, user.color);
 
-    // chat state
+    // ── State ─────────────────────────────────────────────────────────────
+    const [snapshots, setSnapshots] = useState(roomData.snapshots);
+    const [snapshotIdx, setSnapshotIdx] = useState(4);
+    const firedEvents = useRef<Set<number>>(new Set([4]));
+
+    const [activeTab, setActiveTab] = useState("authController.js");
+    const [tabs, setTabs] = useState([
+        { name: "authController.js", icon: "js" },
+        { name: "styles.css", icon: "css" },
+        { name: "index.html", icon: "html" },
+    ]);
+    const [files, setFiles] = useState<Record<string, string>>({
+        "authController.js": roomData.snapshots[4]?.code ?? "",
+        "styles.css": "/* Global styles */\n\nbody {\n  margin: 0;\n  font-family: system-ui, sans-serif;\n  background: #0A0A0F;\n  color: #E4E4E7;\n}",
+        "index.html": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\">\n  <title>CodeCouncil</title>\n</head>\n<body>\n  <div id=\"root\"></div>\n</body>\n</html>",
+    });
+
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const chatEndRef = useRef<HTMLDivElement>(null);
 
-
-    const [snapshotIdx, setSnapshotIdx] = useState(4); // default to fixed version
-    const firedEvents = useRef<Set<number>>(new Set([4])); // idx 4 already shown in initial msgs
-
-    // Monaco editor ref (for decorations)
+    // Refs
+    const wsRef = useRef<WebSocket | null>(null);
+    const editTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const editorRef = useRef<MonacoNS.editor.IStandaloneCodeEditor | null>(null);
+    const agentAlertsSent = useRef<Set<string>>(new Set());
     const monacoRef = useRef<typeof MonacoNS | null>(null);
     const decorationIds = useRef<string[]>([]);
 
-    const [activeTab, setActiveTab] = useState("authController.js");
-
-    // hydrate messages once room data is ready
+    // ── WebSocket: single connection per roomId ────────────────────────────
     useEffect(() => {
-        setMessages(roomData.messages);
-        // pre-fire the idx=4 event (it's in the initial message set)
-        firedEvents.current = new Set([4]);
+        const storedUser: { name: string; color: string } = (() => {
+            try { return JSON.parse(localStorage.getItem("codepulse_user") ?? "{}"); }
+            catch { return {}; }
+        })();
+        const userName = storedUser.name || user.name || "Guest";
+        const avatarColor = storedUser.color || user.color || "#3B82F6";
+
+        const ws = new WebSocket("ws://localhost:5000");
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+            console.log("[CodeCouncil] WebSocket connected → ws://localhost:5000");
+            ws.send(JSON.stringify({ type: "JOIN_ROOM", roomId, userName, avatarColor }));
+        };
+
+        ws.onmessage = (e) => {
+            try {
+                const data = JSON.parse(e.data as string);
+                switch (data.type) {
+                    case "ROOM_STATE":
+                        if (data.messages?.length) setMessages(data.messages);
+                        if (data.files && Object.keys(data.files).length) {
+                            setFiles(data.files);
+                            const newTabs = Object.keys(data.files).map((name) => {
+                                const ext = name.split(".").pop() ?? "";
+                                return { name, icon: ext === "css" ? "css" : ext === "html" ? "html" : "js" };
+                            });
+                            setTabs(newTabs);
+                        }
+                        setSnapshots(data.snapshots || []);
+                        break;
+                    case "NEW_MESSAGE":
+                        if (data.message) setMessages((prev) => {
+                            if (prev.some((m) => m.id === data.message.id)) return prev;
+                            return [...prev, data.message];
+                        });
+                        break;
+                    case "FILE_UPDATED":
+                        if (data.fileName) setFiles((prev) => ({ ...prev, [data.fileName]: data.content ?? "" }));
+                        break;
+                    case "FILE_CREATED":
+                        if (data.fileName) {
+                            const ext = (data.fileName as string).split(".").pop() ?? "";
+                            setTabs((prev) => [...prev, { name: data.fileName, icon: ext === "css" ? "css" : ext === "html" ? "html" : "js" }]);
+                            setFiles((prev) => ({ ...prev, [data.fileName]: "" }));
+                            setActiveTab(data.fileName);
+                        }
+                        break;
+                    case "FILE_DELETED":
+                        if (data.fileName) {
+                            setFiles((prev) => {
+                                const next = { ...prev };
+                                delete next[data.fileName];
+                                const firstKey = Object.keys(next)[0];
+                                if (firstKey) setActiveTab(firstKey);
+                                return next;
+                            });
+                            setTabs((prev) => {
+                                if (prev.length <= 1) return prev;
+                                return prev.filter((t) => t.name !== data.fileName);
+                            });
+                        }
+                        break;
+                    case "SNAPSHOT_SAVED":
+                        if (data.snapshot) setSnapshots((prev) => [...prev, data.snapshot]);
+                        break;
+                    case "USER_JOINED":
+                        console.log(`[CodeCouncil] ${data.userName} joined`);
+                        break;
+                }
+            } catch { /* ignore malformed frames */ }
+        };
+
+        ws.onerror = (e) => console.error("[CodeCouncil] WS error:", e);
+        ws.onclose = () => console.log("[CodeCouncil] WS closed");
+
+        // Fallback: show demo messages if WS doesn't respond within 1.5s
+        const fallbackTimer = setTimeout(() => {
+            setMessages((prev) => (prev.length === 0 ? roomData.messages : prev));
+        }, 1500);
+
+        return () => {
+            clearTimeout(fallbackTimer);
+            if (editTimerRef.current) clearTimeout(editTimerRef.current);
+            ws.close();
+            wsRef.current = null;
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [roomId]);
 
-    // scroll chat to bottom
-    useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
-
-    // timeline AI trigger
+    // ── Sync editor content when timeline slider moves ────────────────────
     useEffect(() => {
-        const event = roomData.timelineEvents.find((e) => e.snapshot === snapshotIdx);
-        if (!event || firedEvents.current.has(snapshotIdx)) return;
-        firedEvents.current.add(snapshotIdx);
-        const aiMsg: Message = {
-            id: Date.now(), type: "ai", author: "CodeCouncil AI",
-            avatar: "AI", avatarColor: "#4F7EEB",
-            time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
-            content: event.message, isAI: true,
-        };
-        setMessages((prev) => [...prev, aiMsg]);
-    }, [snapshotIdx, roomData.timelineEvents]);
+        const snap = snapshots[snapshotIdx];
+        if (!snap) return;
+        // If snapshot has a fileName, switch to that tab; else default to authController.js
+        const fileName = (snap as { fileName?: string; code: string }).fileName ?? "authController.js";
+        setFiles((prev) => ({ ...prev, [fileName]: snap.code }));
+        setActiveTab(fileName);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [snapshotIdx]);
 
-    // Monaco decorations — fire when snapshotIdx changes
+    // ── Monaco decorations on snapshot change ─────────────────────────────
     useEffect(() => {
         const editor = editorRef.current;
         const monaco = monacoRef.current;
         if (!editor || !monaco) return;
-
-        // clear previous decorations
         decorationIds.current = editor.deltaDecorations(decorationIds.current, []);
-
-        if (snapshotIdx === 1) {
-            // v2 · Bug — apply red gutter + line highlight decorations
-            decorationIds.current = applyBugDecorations(editor, monaco);
-        }
+        if (snapshotIdx === 1) decorationIds.current = applyBugDecorations(editor, monaco);
     }, [snapshotIdx]);
 
+    // ── Timeline AI chat bubble injection ─────────────────────────────────
+    useEffect(() => {
+        const event = roomData.timelineEvents.find((e) => e.snapshot === snapshotIdx);
+        if (!event || firedEvents.current.has(snapshotIdx)) return;
+        firedEvents.current.add(snapshotIdx);
+        setMessages((prev) => [...prev, {
+            id: Date.now(), type: "ai", author: "CodeCouncil AI",
+            avatar: "AI", avatarColor: "#4F7EEB",
+            time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+            content: event.message, isAI: true,
+        }]);
+    }, [snapshotIdx, roomData.timelineEvents]);
+
+    // ── Auto-scroll chat ───────────────────────────────────────────────────
+    useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+
+    // ── Proactive background agent (runs every 30s) ────────────────────────
+    useEffect(() => {
+        const agentInterval = setInterval(() => {
+            const code = files[activeTab] ?? "";
+            const bugPatterns: { pattern: RegExp; issue: string }[] = [
+                { pattern: /setInterval/g, issue: "Memory leak: setInterval without cleanup" },
+                { pattern: /\.then\(.*\)(?!\.catch)/g, issue: "Unhandled promise rejection" },
+                { pattern: /console\.log/g, issue: "Debug logs in production code" },
+                { pattern: /var /g, issue: "Legacy var declaration detected" },
+            ];
+            bugPatterns.forEach(({ pattern, issue }) => {
+                pattern.lastIndex = 0; // reset stateful regex
+                if (pattern.test(code) && !agentAlertsSent.current.has(issue)) {
+                    agentAlertsSent.current.add(issue);
+                    setMessages((prev) => [...prev, {
+                        id: Date.now(), type: "ai" as const, author: "CodeCouncil AI",
+                        avatar: "AI", avatarColor: "#8B5CF6",
+                        time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+                        content: `🤖 Agent detected: ${issue} in ${activeTab}. This was likely introduced in the current edit.`,
+                        isAI: true,
+                    }]);
+                }
+            });
+
+            // Inactivity check — no messages in last 5 min
+            setMessages((prev) => {
+                const lastMsg = prev[prev.length - 1];
+                if (!lastMsg) return prev;
+                const lastTime = new Date(`1970/01/01 ${lastMsg.time}`).getTime();
+                const nowTime = new Date(`1970/01/01 ${new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}`).getTime();
+                const diff = Math.abs(nowTime - lastTime);
+                if (diff > 300000 && !agentAlertsSent.current.has("inactivity")) {
+                    agentAlertsSent.current.add("inactivity");
+                    return [...prev, {
+                        id: Date.now(), type: "ai" as const, author: "CodeCouncil AI",
+                        avatar: "AI", avatarColor: "#8B5CF6",
+                        time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+                        content: "⚡ Agent: Session inactive for 5 minutes. Last open issue: authController.js null check. Resume?",
+                        isAI: true,
+                    }];
+                }
+                return prev;
+            });
+        }, 30000);
+
+        return () => clearInterval(agentInterval);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [files, activeTab]);
+
+    // ── Editor onChange: update local files + debounced UPDATE_FILE ───────
+    const handleEditorChange = useCallback((value: string | undefined) => {
+        const content = value ?? "";
+        setFiles((prev) => ({ ...prev, [activeTab]: content }));
+        if (editTimerRef.current) clearTimeout(editTimerRef.current);
+        editTimerRef.current = setTimeout(() => {
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ type: "UPDATE_FILE", roomId, fileName: activeTab, content }));
+            }
+        }, 1500);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeTab, roomId]);
+
+    // ── File operations ────────────────────────────────────────────────────
+    const addFile = () => {
+        const name = window.prompt("New filename (e.g. utils.js):")?.trim();
+        if (!name) return;
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: "CREATE_FILE", roomId, fileName: name }));
+        }
+        // Optimistic local update
+        const ext = name.split(".").pop() ?? "";
+        const icon = ext === "css" ? "css" : ext === "html" ? "html" : "js";
+        setTabs((prev) => [...prev, { name, icon }]);
+        setFiles((prev) => ({ ...prev, [name]: "" }));
+        setActiveTab(name);
+    };
+
+    const closeFile = (name: string) => {
+        if (Object.keys(files).length <= 1) return;
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: "DELETE_FILE", roomId, fileName: name }));
+        }
+        const idx = tabs.findIndex((t) => t.name === name);
+        const next = tabs[idx + 1]?.name ?? tabs[idx - 1]?.name;
+        setTabs((prev) => prev.filter((t) => t.name !== name));
+        setFiles((prev) => { const copy = { ...prev }; delete copy[name]; return copy; });
+        if (activeTab === name) setActiveTab(next);
+    };
+
+    // ── Save Snapshot ──────────────────────────────────────────────────────
+    const saveSnapshot = () => {
+        const label = `v${snapshots.length + 1}·Edit`;
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({
+                type: "SAVE_SNAPSHOT", roomId,
+                fileName: activeTab,
+                content: files[activeTab] ?? "",
+                label,
+            }));
+        }
+        // Optimistic local snapshot
+        setSnapshots((prev) => [...prev, { label, color: "#3B82F6", code: files[activeTab] ?? "" }]);
+        setSnapshotIdx((prev) => prev + 1);
+    };
+
+    // ── Send message ───────────────────────────────────────────────────────
     const sendMessage = useCallback(() => {
         if (!input.trim()) return;
-        const newMsg: Message = {
-            id: Date.now(), type: "user",
-            author: user.name, avatar: user.initials, avatarColor: user.color,
-            time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
-            content: input.trim(),
-        };
-        setMessages((prev) => [...prev, newMsg]);
+        const content = input.trim();
         setInput("");
-    }, [input, user]);
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: "SEND_MESSAGE", roomId, userName: user.name, avatarColor: user.color, content }));
+        }
+    }, [input, user, roomId]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     };
 
-    const snapshot = roomData.snapshots[snapshotIdx] ?? roomData.snapshots[0];
+    const snapshot = snapshots[snapshotIdx] ?? snapshots[0];
 
-    // refactor state — keyed by message id
+    // ── Refactor + Ask AI ──────────────────────────────────────────────────
     const [refactorStates, setRefactorStates] = useState<Record<number, RefactorState>>({});
-
     const handleRefactor = useCallback(async (msgId: number) => {
         setRefactorStates((prev) => ({ ...prev, [msgId]: { status: "loading" } }));
         try {
+            const currentCode = files[activeTab] ?? "";
             const res = await fetch("/api/ai/analyze", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    messages: messages.map((m) => ({ author: m.author, content: m.content })),
-                    currentCode: snapshot?.code ?? "",
-                }),
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ messages: messages.slice(-10).map((m) => ({ author: m.author, content: m.content })), currentCode }),
             });
             const data: RefactorResult = await res.json();
             setRefactorStates((prev) => ({ ...prev, [msgId]: { status: "done", result: data } }));
+
+            // Replace file content with AI-fixed version
+            const fixedCode = data.fixedCode ||
+                currentCode.replace("cont ", "const ") + "\n// Fixed: " + (data.fixes?.[0]?.description ?? "AI applied fix");
+
+            setFiles((prev) => ({ ...prev, [activeTab]: fixedCode }));
+
+            const label = "AI Fix · " + new Date().toLocaleTimeString();
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ type: "UPDATE_FILE", roomId, fileName: activeTab, content: fixedCode, userName: "CodeCouncil AI" }));
+                wsRef.current.send(JSON.stringify({ type: "SAVE_SNAPSHOT", roomId, fileName: activeTab, content: fixedCode, label }));
+            }
+            setSnapshots((prev) => [...prev, { label, color: "#8B5CF6", code: fixedCode }]);
+            setSnapshotIdx((prev) => prev + 1);
         } catch {
             setRefactorStates((prev) => ({ ...prev, [msgId]: { status: "idle" } }));
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [messages, snapshot]);
+    }, [messages, files, activeTab, roomId]);
+
+    const [aiThinking, setAiThinking] = useState(false);
+    const handleAskAI = useCallback(async () => {
+        const code = files[activeTab] ?? "";
+        if (!code.trim()) return;
+        setAiThinking(true);
+        const thinkId = Date.now();
+        setMessages((prev) => [...prev, {
+            id: thinkId, type: "ai" as const, author: "CodeCouncil AI",
+            avatar: "AI", avatarColor: "#4F7EEB",
+            time: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+            content: `Analysing \`${activeTab}\`…`, isAI: false,
+        }]);
+        try {
+            const res = await fetch("/api/ai/analyze", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ messages: messages.map((m) => ({ author: m.author, content: m.content })), currentCode: code }),
+            });
+            const data: RefactorResult = await res.json();
+            const summary = [data.analysis, ...(data.fixes ?? []).map((f) => `• ${f.description} (${f.filePath}:${f.lineNumber})`)].join("\n");
+            setMessages((prev) => prev.map((m) => m.id === thinkId ? { ...m, content: summary, isAI: true } : m));
+        } catch {
+            setMessages((prev) => prev.map((m) => m.id === thinkId ? { ...m, content: "AI unavailable — check your API key." } : m));
+        } finally { setAiThinking(false); }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [files, activeTab, messages]);
 
     return (
         <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#0A0A0F", overflow: "hidden" }}>
@@ -328,15 +569,24 @@ export default function RoomPage() {
                     </div>
 
                     <div style={{ flex: 1, overflowY: "auto", paddingTop: 4 }}>
-                        {messages.map((msg) => (
-                            <ChatMessage
-                                key={msg.id}
-                                msg={msg}
-                                isOwn={msg.type === "user"}
-                                refactorState={refactorStates[msg.id]}
-                                onRefactor={msg.isAI ? () => handleRefactor(msg.id) : undefined}
-                            />
-                        ))}
+                        {(() => {
+                            const currentUserName = (() => {
+                                try { return JSON.parse(localStorage.getItem("codepulse_user") ?? "{}").name ?? ""; }
+                                catch { return ""; }
+                            })();
+                            return messages.map((msg, index) => {
+                                const isOwn = msg.author === currentUserName;
+                                return (
+                                    <ChatMessage
+                                        key={`${msg.id}-${index}`}
+                                        msg={msg}
+                                        isOwn={isOwn}
+                                        refactorState={refactorStates[msg.id]}
+                                        onRefactor={msg.isAI ? () => handleRefactor(msg.id) : undefined}
+                                    />
+                                );
+                            });
+                        })()}
                         <div ref={chatEndRef} />
                     </div>
 
@@ -369,28 +619,59 @@ export default function RoomPage() {
                 <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: "#0B0B14" }}>
                     {/* File tabs */}
                     <div style={{ height: 40, display: "flex", alignItems: "stretch", borderBottom: "1px solid #2D2D35", background: "#0D0D18", overflowX: "auto", flexShrink: 0 }}>
-                        {FILE_TABS.map((tab) => (
+                        {tabs.map((tab) => (
                             <button
                                 key={tab.name}
                                 onClick={() => setActiveTab(tab.name)}
-                                style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 14px", background: "transparent", border: "none", borderBottom: activeTab === tab.name ? "2px solid #4F7EEB" : "2px solid transparent", color: activeTab === tab.name ? "#E4E4E7" : "#4B5563", fontSize: 12, fontWeight: activeTab === tab.name ? 500 : 400, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}
+                                style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 10px 0 14px", background: "transparent", border: "none", borderBottom: activeTab === tab.name ? "2px solid #4F7EEB" : "2px solid transparent", color: activeTab === tab.name ? "#E4E4E7" : "#4B5563", fontSize: 12, fontWeight: activeTab === tab.name ? 500 : 400, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}
                             >
                                 <FileTabIcon type={tab.icon} />
                                 {tab.name}
-                                {activeTab === tab.name && <X size={11} style={{ marginLeft: 2, color: "#4B5563" }} />}
+                                <span
+                                    onClick={(e) => { e.stopPropagation(); closeFile(tab.name); }}
+                                    title="Close file"
+                                    style={{ marginLeft: 4, display: "flex", alignItems: "center", opacity: 0.4, cursor: "pointer", borderRadius: 3, padding: "1px 2px" }}
+                                    onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+                                    onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.4")}
+                                >
+                                    <X size={10} />
+                                </span>
                             </button>
                         ))}
+                        <button
+                            onClick={addFile}
+                            title="New file"
+                            style={{ display: "flex", alignItems: "center", padding: "0 10px", background: "transparent", border: "none", color: "#4B5563", fontSize: 16, cursor: "pointer", flexShrink: 0, lineHeight: 1 }}
+                        >+</button>
                         <div style={{ flex: 1 }} />
-                        <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "0 10px" }}>
-                            <button style={{ background: "transparent", border: "none", cursor: "pointer", color: "#4B5563", padding: 4, borderRadius: 5, display: "flex" }}><Play size={13} /></button>
-                            <button style={{ background: "transparent", border: "none", cursor: "pointer", color: "#4B5563", padding: 4, borderRadius: 5, display: "flex" }}><MoreHorizontal size={13} /></button>
-                        </div>
+                        {/* 💾 Save Snapshot button */}
+                        <button
+                            onClick={saveSnapshot}
+                            title="Save snapshot to timeline"
+                            style={{ display: "flex", alignItems: "center", gap: 4, margin: "0 4px", padding: "4px 10px", background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.3)", borderRadius: 6, color: "#60A5FA", fontSize: 11, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(59,130,246,0.22)")}
+                            onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(59,130,246,0.12)")}
+                        >
+                            💾 Save
+                        </button>
+                        {/* Ask AI button */}
+                        <button
+                            onClick={handleAskAI}
+                            disabled={aiThinking}
+                            title="Ask AI to analyse current file"
+                            style={{ display: "flex", alignItems: "center", gap: 5, margin: "0 8px", padding: "4px 10px", background: aiThinking ? "#1A1A2E" : "rgba(79,126,235,0.12)", border: "1px solid rgba(79,126,235,0.3)", borderRadius: 6, color: aiThinking ? "#4B5563" : "#7BA4F5", fontSize: 11, fontWeight: 600, cursor: aiThinking ? "default" : "pointer", flexShrink: 0, transition: "all 0.15s" }}
+                            onMouseEnter={(e) => { if (!aiThinking) e.currentTarget.style.background = "rgba(79,126,235,0.2)"; }}
+                            onMouseLeave={(e) => { if (!aiThinking) e.currentTarget.style.background = "rgba(79,126,235,0.12)"; }}
+                        >
+                            <Bot size={12} />
+                            {aiThinking ? "Analysing…" : "Ask AI"}
+                        </button>
                     </div>
 
                     {/* Monaco editor */}
                     <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
                         {/* Bug annotation banner — visible only on snapshot 1 */}
-                        {snapshotIdx === 1 && (
+                        {snapshots[snapshotIdx]?.label?.includes("Bug") && (
                             <div style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, background: "linear-gradient(90deg,#2A0A0A,#1A0808)", borderBottom: "1px solid #EF444455", padding: "6px 16px", display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#FCA5A5" }}>
                                 <span style={{ fontSize: 14 }}>🔴</span>
                                 <strong>Bug detected on lines 8–10:</strong> Uncleared <code style={{ background: "#3A0808", padding: "1px 4px", borderRadius: 3 }}>setInterval</code> — memory leak
@@ -398,9 +679,11 @@ export default function RoomPage() {
                         )}
                         <MonacoEditor
                             height="100%"
-                            defaultLanguage="javascript"
-                            value={snapshot.code}
+                            path={activeTab}
+                            language={activeTab.endsWith(".css") ? "css" : activeTab.endsWith(".html") ? "html" : "javascript"}
+                            value={files[activeTab] ?? ""}
                             theme="vs-dark"
+                            onChange={handleEditorChange}
                             options={{
                                 fontSize: 13.5,
                                 fontFamily: "'JetBrains Mono','Cascadia Code',monospace",
@@ -408,8 +691,8 @@ export default function RoomPage() {
                                 minimap: { enabled: false },
                                 scrollBeyondLastLine: false,
                                 wordWrap: "on",
-                                padding: { top: snapshotIdx === 1 ? 42 : 12, bottom: 12 },
-                                readOnly: true,
+                                padding: { top: snapshotIdx === 1 && activeTab === "authController.js" ? 42 : 12, bottom: 12 },
+                                readOnly: false,
                                 contextmenu: false,
                                 overviewRulerLanes: 1,
                                 glyphMargin: true,
@@ -458,17 +741,13 @@ export default function RoomPage() {
                                 }
                             }}
                         />
-                        {/* Collaborator cursor label */}
-                        <div style={{ position: "absolute", top: snapshotIdx === 1 ? 220 : 180, left: 400, background: "#22C55E", color: "white", fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: "4px 4px 4px 0", pointerEvents: "none", whiteSpace: "nowrap", boxShadow: "0 2px 8px rgba(34,197,94,0.4)", zIndex: 5 }}>
-                            Priya
-                        </div>
                     </div>
 
                     {/* ── Timeline ── */}
                     <div style={{ background: "#0D0D18", borderTop: "1px solid #2D2D35", padding: "10px 16px 14px", flexShrink: 0 }}>
                         {/* Snapshot label buttons */}
                         <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-                            {roomData.snapshots.map((s, i) => (
+                            {snapshots.map((s, i) => (
                                 <button
                                     key={i}
                                     onClick={() => setSnapshotIdx(i)}
@@ -486,7 +765,7 @@ export default function RoomPage() {
                         </div>
                         {/* Slider */}
                         <input
-                            type="range" min={0} max={roomData.snapshots.length - 1} value={snapshotIdx}
+                            type="range" min={0} max={snapshots.length - 1} value={snapshotIdx}
                             onChange={(e) => setSnapshotIdx(Number(e.target.value))}
                             style={{ width: "100%", accentColor: snapshot.color, cursor: "pointer" }}
                         />

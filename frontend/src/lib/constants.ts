@@ -13,9 +13,11 @@ Return exactly this shape:
   "fixes": [
     { "description": "What to fix", "filePath": "path/to/file.ts", "lineNumber": 42 }
   ],
-  "confidence": 94
+  "confidence": 94,
+  "fixedCode": "<complete corrected version of the input code with all bugs fixed>"
 }
-confidence is an integer 0-100.`;
+confidence is an integer 0-100.
+fixedCode must be the full corrected source file — not a snippet, not a diff.`;
 
 export const DOCS_SYSTEM_PROMPT = `You are a technical writer who creates clear, concise README.md files.
 You will be given a project name, chat messages from a debugging session, and code.
@@ -26,7 +28,7 @@ Return ONLY the raw markdown — no explanation, no fences around the entire out
 
 export const ANALYZE_FALLBACK = {
     analysis:
-        "Memory leak detected in fetchUser function. The uncleared setInterval on line 8 accumulates session references on every call, causing heap exhaustion under concurrent load.",
+        "Memory leak detected in 2fetchUser2 function. The uncleared setInterval on line 8 accumulates session references on every call, causing heap exhaustion under concurrent load.",
     fixes: [
         {
             description: "Remove the setInterval and replace with a single async supabase query",
@@ -45,6 +47,22 @@ export const ANALYZE_FALLBACK = {
         },
     ],
     confidence: 94,
+    fixedCode: `// authController.js — AI Fixed Version
+async function fetchUser(id) {
+  if (!id) return null; // null check added
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', id)
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function processData(input) {
+  const result = processData(input); // typo fixed
+  return result;
+}`,
 };
 
 export const DOCS_FALLBACK = `# CodeCouncil
